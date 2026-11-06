@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="15">
+  <title>Registrations | SipDock</title>
+  <style>
+    * { box-sizing: border-box }
+    body { margin: 0; color: #1d3339; background: #f5f8f7; font: 16px/1.5 system-ui, sans-serif }
+    main { max-width: 1080px; margin: auto; padding: 48px 22px }
+    h1 { margin: 0 0 6px; font-size: clamp(30px, 5vw, 46px); line-height: 1.15 }
+    h2 { margin: 0; font-size: 20px }
+    header { padding-bottom: 22px; border-bottom: 2px solid #28776c }
+    p { margin: 0; color: #475d62 }
+    .line, td { overflow-wrap: anywhere }
+    .line, .endpoint { font-family: ui-monospace, monospace }
+    .summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; margin: 30px 0 12px }
+    .table { overflow-x: auto; background: white; border: 1px solid #cbd8d6; border-radius: 8px }
+    table { width: 100%; border-collapse: collapse; text-align: left }
+    th, td { padding: 12px 16px; border-bottom: 1px solid #d8e2e0 }
+    th { background: #e9f1ef; font-size: 14px; white-space: nowrap }
+    tbody tr:last-child td { border: 0 }
+    footer { margin-top: 12px; font-size: 14px; color: #475d62 }
+    a { color: #145c54 }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Registrations</h1>
+      <p>SipDock &middot; <span class="line">$var(line)</span></p>
+    </header>
+    <div class="summary">
+      <h2>Registered phones ($var(active) of $var(limit))</h2>
+      <p>Upstream registration <strong>$var(upstream_state)</strong></p>
+    </div>
+    <div class="table">
+      <table aria-label="Current local SIP registrations">
+        <thead><tr><th>Device</th><th>Contact address</th><th>Observed source</th><th>Expires in</th></tr></thead>
+        <tbody>$var(rows)</tbody>
+      </table>
+    </div>
+    <footer>Updates every 15 seconds. <a href="/registrations">Refresh now</a></footer>
+  </main>
+</body>
+</html>

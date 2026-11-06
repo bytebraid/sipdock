@@ -1,0 +1,22 @@
+advertised_host: 127.0.0.1
+max_clients: 30
+logging:
+  debug: true
+upstream:
+  domain: provider.test
+  host: 127.0.0.2
+  port: 15060
+  username: "1001"
+  auth_username: lab-auth
+  password: lab-only
+  expires: 180
+  trusted_sources: [127.0.0.2/32]
+alerts:
+  enabled: true
+  to: ops@example.test
+  from: sipdock@example.test
+  smtp_host: 127.0.0.1
+  smtp_port: 1587
+  security: plain
+  interval_seconds: 1
+  failure_threshold: 2

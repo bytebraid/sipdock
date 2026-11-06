@@ -1,0 +1,70 @@
+# Four 10 MiB files per service: 80 MiB across one proxy and one monitor.
+x-logging: &bounded-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "4"
+
+x-config: &config
+  type: bind
+  source: ${SIPDOCK_CONFIG:-./config.yaml}
+  target: /etc/sipdock/config.yaml
+  read_only: true
+  bind:
+    create_host_path: false
+
+services:
+  proxy:
+    image: sipdock:local
+    build: .
+    restart: unless-stopped
+    logging: *bounded-logs
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETUID, SETGID, CHOWN, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /run/sipdock:mode=0700,nosuid,nodev,noexec
+    sysctls:
+      net.ipv6.bindv6only: "1"
+    networks:
+      default:
+        ipv4_address: 172.31.253.3
+        ipv6_address: fd6c:7369:7064:1::3
+    volumes:
+      - *config
+      - ./certs/server:/etc/sipdock/certs:ro
+    ports:
+      - "5060:5060/udp"
+      - "5061:5061/tcp"
+      - "5062:8080/tcp"
+      - "127.0.0.1:8081:8081/tcp"
+  monitor:
+    image: sipdock:local
+    logging: *bounded-logs
+    pull_policy: never
+    command: ["monitor"]
+    user: kamailio
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      default:
+        ipv4_address: 172.31.253.2
+        ipv6_address: fd6c:7369:7064:1::2
+    restart: unless-stopped
+    depends_on:
+      - proxy
+    volumes:
+      - *config
+    healthcheck:
+      disable: false
+      test: ["CMD", "python3", "sipdock.py", "monitor-healthcheck"]
+
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.31.253.0/28
+          gateway: 172.31.253.1
+        - subnet: fd6c:7369:7064:1::/64
+          gateway: fd6c:7369:7064:1::1

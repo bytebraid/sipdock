@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 312" role="img" aria-labelledby="title desc">
+  <title id="title">SipDock — the banana telephone</title>
+  <desc id="desc">A golden banana rests on a teal rotary telephone. A single line links it to a SIP provider above and branches below to a desktop, a desk phone and a cordless handset.</desc>
+  <defs>
+    <linearGradient id="paper" x2="1" y2=".25" gradientUnits="objectBoundingBox">
+      <stop stop-color="#f5f4e8"/><stop offset="1" stop-color="#e5f2eb"/>
+    </linearGradient>
+    <linearGradient id="peel" x2=".1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#ffe39a"/><stop offset=".52" stop-color="#f9c65f"/><stop offset="1" stop-color="#e8a544"/>
+    </linearGradient>
+    <pattern id="dots" width="10" height="10" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#87aba0" opacity=".35"/>
+    </pattern>
+  </defs>
+  <rect x="1" y="1" width="838" height="310" rx="26" fill="url(#paper)" stroke="#c9dacf"/>
+  <path d="M1 245Q100 185 231 238T410 252Q444 239 470 265T536 311H26Q1 311 1 285Z" fill="#d9e8d8" opacity=".56"/>
+  <path d="M0 270Q111 222 211 261T400 268" fill="none" stroke="#a8c5b7" stroke-width="1.4"/>
+  <path d="M36 27h76v26H36zM737 260h68v26h-68z" fill="url(#dots)"/>
+  <g fill="#173f39">
+    <text x="56" y="152" font-family="Georgia, 'Times New Roman', serif" font-size="83" font-weight="bold" letter-spacing="-5">SipDock</text>
+    <text x="61" y="190" font-family="Verdana, sans-serif" font-size="19" letter-spacing=".4">SIP registration proxy</text>
+  </g>
+  <!-- One trunk above the switchboard, independent registration branches below. -->
+  <g fill="none" stroke="#4d8279" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M581 45v47m0 109v37m-107 0v-9q0-9 9-9h196q9 0 9 9v9"/>
+    <circle cx="581" cy="220" r="4" fill="#4d8279"/>
+  </g>
+  <g fill="#f6fbf7" stroke="#416e65" stroke-width="2.3" stroke-linejoin="round">
+    <path d="M569 42c-10 0-12-14-2-17 3-13 22-13 26 1 11-1 14 16 2 16z"/>
+  </g>
+  <g font-family="Verdana, sans-serif" fill="#345e54">
+    <text x="616" y="37" font-size="16" font-weight="bold">SIP provider</text>
+    <text x="616" y="60" font-size="14">One registration</text>
+  </g>
+  <!-- The original rotary set, with a banana for the receiver. -->
+  <g transform="translate(464 66)" stroke="#254b42" stroke-linejoin="round" stroke-linecap="round">
+    <ellipse cx="118" cy="134" rx="77" ry="6" fill="#91ad98" opacity=".32" stroke="none"/>
+    <path d="M33 68C30 91 5 111 11 120s28 1 44-4" fill="none" stroke-width="8"/>
+    <path d="M33 68C30 91 5 111 11 120s28 1 44-4" fill="none" stroke="#749487" stroke-width="5" stroke-dasharray="1 5"/>
+    <path d="M67 117v12q0 5 5 5h13v-10m67-7v12q0 5 5 5h13v-10" fill="#27473d" stroke-width="3"/>
+    <path d="M61 109q20-11 24-47l2-13q1-4 6-4h5l2 13h37l2-13h6q4 0 5 5l2 15q5 32 23 44z" fill="#49786b" stroke-width="3.2"/>
+    <path d="M65 108q18-9 24-36m59-3q5 28 19 38" fill="none" stroke="#89a997" stroke-width="2.4"/>
+    <path d="M61 107h112q6 0 6 7v13q0 3-5 3H59q-5 0-5-4v-12q0-7 7-7z" fill="#325c50" stroke-width="3.2"/>
+    <path d="M58 114h117" fill="none" stroke="#749887" stroke-width="2"/>
+    <ellipse cx="117" cy="79" rx="29" ry="23" fill="#233f38" stroke-width="2.8"/>
+    <ellipse cx="117" cy="75" rx="29" ry="22" fill="#c3d2b7" stroke-width="2.8"/>
+    <ellipse cx="117" cy="75" rx="13" ry="10" fill="#f1eacd" stroke-width="1.8"/>
+    <g fill="#49695a" stroke="none">
+      <ellipse cx="99" cy="66" rx="3.6" ry="3"/><ellipse cx="110" cy="60" rx="3.7" ry="2.7"/>
+      <ellipse cx="122" cy="60" rx="3.7" ry="2.7"/><ellipse cx="133" cy="65" rx="3.6" ry="2.9"/>
+      <ellipse cx="139" cy="74" rx="3.5" ry="3"/><ellipse cx="128" cy="88" rx="3.6" ry="2.8"/>
+      <ellipse cx="116" cy="91" rx="3.6" ry="2.7"/><ellipse cx="104" cy="87" rx="3.6" ry="2.8"/>
+      <ellipse cx="96" cy="78" rx="3.5" ry="3"/>
+    </g>
+    <path d="m134 81 10-3" fill="none" stroke-width="3"/>
+    <path d="M30 64C31 33 66 11 106 9c37-3 83 10 100 34 5 7 8 15 8 18q-1 5-7 3c-28-13-48-19-69-21-47-5-83 8-95 28l-6 7-10-4z" fill="url(#peel)" stroke-width="3"/>
+    <path d="M40 51C65 15 133 7 176 29" fill="none" stroke="#fff0b6" stroke-width="3"/>
+    <path d="M46 63c29-28 79-35 126-20" fill="none" stroke="#d29b48" stroke-width="1.8"/>
+    <path d="m28 69 12 4-5 9-5-3-5 1 2-6z" fill="#a8804e" stroke-width="2"/>
+    <path d="m207 62 6-2" stroke-width="3"/>
+  </g>
+  <g stroke="#315e54" fill="#f0f6eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="455" y="241" width="38" height="23" rx="3"/><path d="M474 264v6m-9 1h18"/>
+    <rect x="563" y="246" width="36" height="23" rx="4"/><path d="M565 245q15-8 32 0l-2 6-7-3h-15l-6 3z" fill="#9bb9a9"/>
+    <path d="M577 256h8m-8 5h8"/>
+    <rect x="679" y="240" width="18" height="31" rx="4"/><path d="M685 244h6m-5 22h4"/>
+  </g>
+  <text x="581" y="295" text-anchor="middle" fill="#345e54" font-family="Verdana, sans-serif" font-size="15">Registered phones ring together</text>
+</svg>

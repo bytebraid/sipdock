@@ -1,0 +1,12 @@
+/config.yaml
+/config.yml
+/.env
+/certs/*
+!/certs/README.md
+!/certs/server/
+/certs/server/*
+!/certs/server/.gitkeep
+/dist/
+__pycache__/
+/reports/
+/.venv/

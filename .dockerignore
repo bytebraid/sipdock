@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!kamailio.cfg
+!sipdock.py
+!registrations.html
+!LICENSE.md
+!build/
+!build/rootfs.py

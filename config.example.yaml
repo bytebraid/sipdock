@@ -1,0 +1,47 @@
+# Address that BOTH the phones and the provider can reach on UDP 5060.
+advertised_host: sipdock.example.net
+max_clients: 16                 # Simultaneous registered contacts for this line (1–30).
+
+logging:
+  debug: false                 # Trace SIP traffic and registration decisions to stdout
+
+tls:
+  enable: false
+  certificate: /etc/sipdock/certs/fullchain.pem
+  private_key: /etc/sipdock/certs/privkey.pem
+  client_ca: /etc/sipdock/certs/client-ca.pem
+
+firewall:
+  # Approved phone networks, for example ["192.0.2.42/32"]
+  client_ipv4:     
+    - 172.31.253.0/28              # Keep this, it's the default docker subnet
+  client_ipv6: 
+    - fd6c:7369:7064:1::/64        # Keep this, it's the default docker subnet      
+  # Compose monitor; add LB probes
+  # Default docker hosts via the local-only port mapping
+  # Add your loadbalancers to health_sources
+  health_sources: [172.31.253.0/28, "fd6c:7369:7064:1::2/128"]  
+  admin_sources: [172.31.253.0/28]   
+
+upstream:
+  domain: sip.example.net       # SIP domain in the phones' account settings
+  host: sip.example.net         # Provider's registrar / outbound proxy
+  port: 5060
+  username: "441234567890"      # Line / address-of-record user
+  auth_username: "441234567890" # Authentication ID, if different
+  password: "replace-with-provider-password"
+  expires: 300                 # Requested upstream registration lifetime, seconds
+  trusted_sources:             # Provider's inbound signalling IPs or CIDRs
+    - 192.0.2.10/32
+
+alerts:
+  enabled: false               # Set true after filling in the SMTP settings
+  to: ops@example.net
+  from: sipdock@example.net
+  smtp_host: smtp.example.net
+  smtp_port: 587
+  security: starttls           # starttls, tls (implicit TLS), or plain (local relay)
+  username: sipdock@example.net
+  password: "replace-with-smtp-password"
+  interval_seconds: 15
+  failure_threshold: 3
