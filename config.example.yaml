@@ -5,6 +5,10 @@ max_clients: 16                 # Simultaneous registered contacts for this line
 logging:
   debug: false                 # Trace SIP traffic and registration decisions to stdout
 
+mutex:
+  enabled: false               # false on the master, true on the standby
+  healthz: "$advertised_host/healthz"  # On the standby, point this at the master's health endpoint
+
 tls:
   enable: false
   certificate: /etc/sipdock/certs/fullchain.pem

@@ -1,12 +1,15 @@
-"""Configure Kamailio or run its independent HTTP/SMTP monitor."""
+"""Run Kamailio and control upstream registration, or monitor HTTP health and SMTP alerts."""
 
 import hashlib
 import http.client
 import ipaddress
 import json
+import logging
 import os
 import re
+import signal
 import smtplib
+import socket
 import sqlite3
 import ssl
 import subprocess
@@ -16,6 +19,9 @@ from contextlib import closing
 from email.headerregistry import Address
 from email.message import EmailMessage
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Event, Thread
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -23,8 +29,52 @@ CONFIG = Path("/etc/sipdock/config.yaml")
 RUN = Path("/run/sipdock")
 SCHEMA = Path("/usr/share/kamailio/db_sqlite")
 HEALTH_HOST = "proxy"
+# Flags returned by Kamailio's uac.reg_info RPC.
+UAC_REG_ONGOING = 1 << 1
+UAC_REG_ONLINE = 1 << 2
 HOST = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*"
 SIP_ID = r"[a-zA-Z0-9+*_.@-]{1,64}"
+LOG = logging.getLogger("sipdock")
+
+
+class ThreadFormatter(logging.Formatter):
+    converter = time.gmtime
+    colours = (36, 35, 32, 34, 96, 95, 92, 94)
+
+    def __init__(self):
+        super().__init__("%(asctime)s %(levelname)s %(name)s:%(lineno)d [%(threadName)s] %(message)s",
+                         datefmt="%Y-%m-%dT%H:%M:%SZ")
+        self.thread_colours = {"MainThread": self.colours[0]}
+
+    def format(self, record):
+        if record.levelno >= logging.ERROR:
+            colour = "1;33"
+        else:
+            colour = self.thread_colours.setdefault(
+                record.threadName, self.colours[len(self.thread_colours) % len(self.colours)])
+        return f"\x1b[{colour}m{super().format(record)}\x1b[0m"
+
+
+def debug_enabled(data):
+    settings = data.get("logging", {})
+    if not isinstance(settings, dict) or type(settings.get("debug", False)) is not bool:
+        raise ValueError("logging.debug must be true or false")
+    return settings.get("debug", False)
+
+
+class ConfigLoader(yaml.SafeLoader):
+    def compose_mapping_node(self, anchor):
+        node = super().compose_mapping_node(anchor)
+        # Check explicit setting names before YAML merges are expanded. An
+        # inherited default may still be overridden by an explicit setting.
+        lines = {}
+        for key, _ in node.value:
+            if key.tag == "tag:yaml.org,2002:str":
+                line = key.start_mark.line + 1
+                if key.value in lines:
+                    raise ValueError(f"duplicate config.yaml key {key.value!r} on lines {lines[key.value]} and {line}")
+                lines[key.value] = line
+        return node
 
 
 def section(data, key):
@@ -48,6 +98,21 @@ def integer(data, key, default, minimum, maximum):
     if type(value) is not int or not minimum <= value <= maximum:
         raise ValueError(f"{key} must be an integer between {minimum} and {maximum}")
     return value
+
+
+def mutex_endpoint(data, advertised):
+    mutex = data.get("mutex", {})
+    if not isinstance(mutex, dict) or type(mutex.get("enabled", False)) is not bool:
+        raise ValueError("mutex.enabled must be true or false")
+    uri = mutex.get("healthz", f"{advertised}/healthz")
+    if not isinstance(uri, str) or not uri.isascii() or re.search(r"[\x00-\x20\x7f\\#]", uri):
+        raise ValueError("mutex.healthz must be an HTTP(S) health URI")
+    uri = uri.replace("$advertised_host", advertised)
+    url = urlsplit(uri if "://" in uri else "https://" + uri)
+    if (url.scheme not in ("http", "https") or not url.hostname or url.username is not None
+            or url.port == 0):
+        raise ValueError("mutex.healthz must specify an HTTP(S) host without credentials")
+    return url if mutex.get("enabled") else None
 
 
 def cidrs(mapping, key, version=None):
@@ -98,7 +163,7 @@ def install_firewall(data, tls):
     for version, command in [(4, "iptables-restore"), (6, "ip6tables-restore")]:
         rules = firewall_rules(version, clients, provider, health, admin, tls)
         subprocess.run([command, "--wait", "5"], input=rules, text=True, check=True)
-    print(f"Inbound firewall active on IPv4 and IPv6. Phone transport: {'mTLS' if tls else 'UDP'}.", flush=True)
+    LOG.info("Inbound firewall active on IPv4 and IPv6. Phone transport is %s.", "mTLS" if tls else "UDP")
 
 
 def tls_material(settings):
@@ -127,16 +192,16 @@ def configure_tls(material):
 
 def configure(data, tls=False):
     max_clients = integer(data, "max_clients", 16, 1, 30)
-    logging = data.get("logging", {})
-    if not isinstance(logging, dict) or type(logging.get("debug", False)) is not bool:
-        raise ValueError("logging.debug must be true or false")
-    debug = logging.get("debug", False)
+    debug = debug_enabled(data)
     advertised = string(data, "advertised_host", HOST)
+    endpoint = mutex_endpoint(data, advertised)
+    instance = os.urandom(12).hex()
     upstream = section(data, "upstream")
     domain = string(upstream, "domain", HOST)
     host = string(upstream, "host", HOST)
     port = integer(upstream, "port", 5060, 1, 65535)
     user = string(upstream, "username", r"[a-zA-Z0-9+*_.-]{1,64}")
+    contact = f"sd-{instance}" if endpoint else user
     auth = string(upstream, "auth_username", SIP_ID) if "auth_username" in upstream else user
     password = string(upstream, "password")
     if password == "replace-with-provider-password":
@@ -162,6 +227,9 @@ def configure(data, tls=False):
         "ADVERTISED_HOST": advertised,
         "ADVERTISED_SOCKET": f"{advertised}:5060",
         "LINE_USER": user,
+        "CONTACT_USER": contact,
+        "INSTANCE_HEADER": f"X-SipDock-Instance: {instance}\\r\\n",
+        "STANDBY_INIT": f"standby=i:{int(endpoint is not None)}",
         "LINE_AOR": f"sip:{user}@{domain}",
         "AUTH_USER": auth,
         "LOCAL_HA1": digest,
@@ -188,11 +256,16 @@ def configure(data, tls=False):
                (l_uuid,l_username,l_domain,r_username,r_domain,auth_username,
                 auth_password,auth_proxy,expires)
                VALUES (?,?,?,?,?,?,?,?,?)""",
-            (user, user, domain, user, domain, auth, password, target, expiry),
+            (contact, user, domain, user, domain, auth, password, target, expiry),
         )
         db.commit()
     db_path.replace(RUN / "line.sqlite")
-    print(f"SipDock accepts up to {max_clients} contacts. SIP diagnostics {'enabled' if debug else 'disabled'}.", flush=True)
+    LOG.info("Accepting up to %d contacts. SIP diagnostics %s.", max_clients, "enabled" if debug else "disabled")
+    if endpoint is None:
+        LOG.info("Preferred master (mutex.enabled=false). Registering independently. Peer polling is disabled.")
+    else:
+        LOG.info("Standby (mutex.enabled=true). Waiting for master health at %s", endpoint.geturl())
+    return endpoint, instance, contact
 
 
 def probe(host=HEALTH_HOST):
@@ -203,6 +276,256 @@ def probe(host=HEALTH_HOST):
             return None if status == 200 else f"HTTP {status}"
         except (OSError, http.client.HTTPException) as exc:
             return type(exc).__name__
+
+
+def peer_response(response, uri):
+    ok = response.status == 200
+    debug = LOG.isEnabledFor(logging.DEBUG)
+    if not ok and not debug:
+        LOG.error("Mutex GET %s status=%d", uri, response.status)
+        return "down", None
+
+    peer = response.getheader("X-SipDock-Instance")
+    try:
+        body = response.read(4096 if debug else 65)
+        if debug:
+            level = logging.DEBUG if ok else logging.ERROR
+            LOG.log(level, "Mutex GET %s status=%d body=%r", uri, response.status, body)
+            # Preserve the entire diagnostic if a reverse proxy serves a large
+            # error page, without allocating its full size in the SIP process.
+            chunk = body
+            while len(chunk) == 4096:
+                chunk = response.read(4096)
+                if chunk:
+                    LOG.log(level, "Mutex GET %s status=%d body continued=%r", uri, response.status, chunk)
+    except (OSError, http.client.HTTPException) as exc:
+        LOG.error("Mutex GET %s status=%d body incomplete (%r) error=%r",
+                  uri, response.status, getattr(exc, "partial", b""), exc)
+        # A peer that returned 200 is up even if its state is unreadable.
+        return ("healthy", peer) if ok else ("down", None)
+    if not ok:
+        return "down", None
+    if len(body) <= 64 and body.strip() in (b"ready", b"registered"):
+        return body.strip().decode("ascii"), peer
+    return "healthy", peer
+
+
+def poll_peer(url):
+    path = url.path or "/"
+    if url.query:
+        path += "?" + url.query
+    transports = [("http", http.client.HTTPConnection)]
+    if url.scheme == "https":
+        transports.insert(0, ("https", http.client.HTTPSConnection))
+    for scheme, transport in transports:
+        uri = url._replace(scheme=scheme, path=url.path or "/").geturl()
+        LOG.debug("Mutex GET %s", uri)
+        try:
+            with closing(transport(url.hostname, url.port, timeout=3)) as connection:
+                connection.request("GET", path, headers={"Cache-Control": "no-cache"})
+                return peer_response(connection.getresponse(), uri)
+        except (OSError, http.client.HTTPException) as exc:
+            if scheme == "https":
+                if LOG.isEnabledFor(logging.DEBUG):
+                    LOG.error("Mutex GET %s status=unavailable body=unavailable error=%r. Trying HTTP.", uri, exc)
+            else:
+                LOG.error("Mutex GET %s status=unavailable body=unavailable error=%r", uri, exc)
+    return "down", None
+
+
+class Election:
+    log = LOG.getChild("Election")
+
+    def __init__(self, instance):
+        self.instance = instance
+        self.active = False
+        self.interval = 20
+        self.ready_polls = 0
+        self.ready_peer = None
+
+    def observe(self, state, peer):
+        if state != "ready" or peer != self.ready_peer:
+            self.ready_polls = 0
+        self.ready_peer = peer
+        if self.active:
+            if state in ("ready", "registered") and peer != self.instance:
+                self.active = False
+                self.interval = 30
+                self.ready_polls = int(state == "ready")
+        elif state == "down":
+            self.active = True
+        elif state == "ready":
+            # The first observation starts the clock. Six complete intervals
+            # must pass, all reporting the same ready peer.
+            self.ready_polls += 1
+            self.active = self.ready_polls >= 7
+        if self.active:
+            self.ready_polls = 0
+            self.interval = 10
+
+
+class Registration:
+    """Drive one Kamailio UAC record over a private Unix datagram socket."""
+    log = LOG.getChild("Registration")
+
+    def __init__(self, channel, contact, mutex):
+        self.channel = channel
+        self.contact = contact
+        self.initial_delay = 30 if mutex else 2
+        self.delay = self.initial_delay
+        self.pending = False
+        self.contact_in_use = False
+        self.request_id = 0
+
+    def rpc(self, method, *params):
+        self.request_id += 1
+        request = dict(jsonrpc="2.0", id=self.request_id, method=method, params=params)
+        self.channel.send(json.dumps(request).encode())
+        reply = json.loads(self.channel.recv(65536))
+        if reply.get("id") != self.request_id or "result" not in reply:
+            # Registration records contain credentials. Never log the response.
+            code = reply.get("error", {}).get("code", "invalid response")
+            raise ValueError(f"Kamailio RPC {method} failed ({code})")
+        return reply["result"]
+
+    def take_over(self):
+        # reg_unregister sets the in-memory expiry to zero. Restore the
+        # configured record before starting a new term.
+        self.rpc("uac.reg_refresh", self.contact)
+        self.rpc("pv.shvSet", "standby", "int", 0)
+        self.pending = False
+        self.delay = self.initial_delay
+        self.log.info("Standby taking over upstream registration.")
+
+    def unregister(self):
+        self.log.info("Sending upstream unregister (Expires=0).")
+        self.rpc("uac.reg_unregister", "l_uuid", self.contact)
+        self.contact_in_use = False
+
+    def yield_to_peer(self):
+        self.unregister()
+        self.rpc("pv.shvSet", "standby", "int", 1)
+        self.log.info("Entered standby after releasing upstream registration.")
+
+    def step(self):
+        if not self.pending:
+            self.contact_in_use = True
+            self.log.debug("Requesting upstream registration or renewal.")
+            self.rpc("uac.reg_register", "l_uuid", self.contact)
+            self.pending = True
+            return 0.25
+        info = self.rpc("uac.reg_info", "l_uuid", self.contact)
+        if info["flags"] & UAC_REG_ONGOING:
+            return 0.25
+        self.pending = False
+        lifetime = info["diff_expires"]
+        if info["flags"] & UAC_REG_ONLINE and lifetime > 0:
+            self.delay = self.initial_delay
+            return max(0.5, lifetime - min(10, lifetime / 5))
+        delay = self.delay
+        self.delay = min(30, 2 * delay)
+        self.log.error("Upstream registration failed. Retrying in %ds.", delay)
+        return delay
+
+
+def watch_master(endpoint, instance, changes, stop):
+    election = Election(instance)
+    election.log.debug("Mutex polling loop started for %s (initial interval %ds).", endpoint.geturl(), election.interval)
+    try:
+        while not stop.is_set():
+            started = time.monotonic()
+            was_active = election.active
+            state, peer = poll_peer(endpoint)
+            election.observe(state, peer)
+            if election.active != was_active:
+                if election.active:
+                    reason = "master health check failed" if state == "down" else "peer ready for six intervals"
+                    election.log.info("Takeover requested because %s.", reason)
+                else:
+                    election.log.info("Yielding to peer %r reporting %s.", peer, state)
+                changes.put(election.active)
+            delay = max(0, started + election.interval - time.monotonic())
+            election.log.debug("Peer state=%s instance=%r self=%s role=%s ready_polls=%d. Next mutex poll in %.3fs.",
+                               state, peer, peer == instance, "active" if election.active else "standby",
+                               election.ready_polls, delay)
+            stop.wait(delay)
+    except Exception as error:
+        changes.put(error)
+
+
+def control_registration(server, line, endpoint, instance):
+    # Peer DNS and HTTPS timeouts must not postpone a SIP renewal or retry.
+    changes = Queue()
+    stop = Event()
+    active = endpoint is None
+    if endpoint:
+        Thread(name="mutex-poll", target=watch_master, args=(endpoint, instance, changes, stop), daemon=True).start()
+    next_register = 0
+    try:
+        while server.poll() is None:
+            delay = max(0, next_register - time.monotonic()) if active else 1
+            try:
+                change = changes.get(timeout=min(1, delay))
+            except Empty:
+                if active and time.monotonic() >= next_register:
+                    delay = line.step()
+                    next_register = time.monotonic() + delay
+                continue
+            if isinstance(change, Exception):
+                raise change
+            active = change
+            if active:
+                line.take_over()
+                next_register = 0
+            else:
+                line.yield_to_peer()
+    finally:
+        stop.set()
+
+
+def serve(endpoint, instance, contact):
+    def stop(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    reply_path = RUN / "controller.sock"
+    reply_path.unlink(missing_ok=True)
+    with closing(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)) as channel:
+        channel.bind(str(reply_path))
+        channel.settimeout(5)
+        line = Registration(channel, contact, endpoint is not None)
+        server = subprocess.Popen(["kamailio", "-DD", "-E", "-f", "/opt/sipdock/kamailio.cfg"])
+        try:
+            deadline = time.monotonic() + 30
+            while server.poll() is None:
+                try:
+                    channel.connect(str(RUN / "kamailio.sock"))
+                    # The RPC socket can open before the UAC worker loads SQLite.
+                    if line.rpc("uac.reg_dump"):
+                        break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    pass
+                if time.monotonic() >= deadline:
+                    raise ValueError("Kamailio did not load the upstream registration")
+                time.sleep(0.1)
+            if server.poll() is None:
+                control_registration(server, line, endpoint, instance)
+            sys.exit(server.returncode)
+        except (SystemExit, KeyboardInterrupt):
+            if server.poll() is None and line.contact_in_use:
+                line.unregister()
+                # Give the registrar time to challenge and confirm the release.
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    if not line.rpc("uac.reg_info", "l_uuid", contact)["flags"] & UAC_REG_ONGOING:
+                        break
+                    time.sleep(0.1)
+            raise
+        finally:
+            if server.poll() is None:
+                server.terminate()
+                server.wait()
+            reply_path.unlink(missing_ok=True)
 
 
 def mail_settings(alerts):
@@ -255,26 +578,26 @@ def monitor(data):
         smtp_identity = f"[{ipaddress.IPv4Address(smtp_identity)}]"
     except ipaddress.AddressValueError:
         pass  # A DNS name is already valid in EHLO.
-    print("Monitoring GET /healthz. Email alerts " + ("enabled." if settings else "disabled."))
+    LOG.info("Monitoring GET /healthz. Email alerts %s.", "enabled" if settings else "disabled")
     failures = 0
     sent = False
     while True:
         detail = probe()
         if detail is None:
             if failures:
-                print("Proxy health recovered.")
+                LOG.info("Proxy health recovered.")
             failures, sent = 0, False
         else:
             failures += 1
             if failures == threshold:
-                print(f"Proxy unhealthy after {failures} checks ({detail}).")
+                LOG.error("Proxy unhealthy after %d checks (%s).", failures, detail)
             if settings and failures >= threshold and not sent:
                 try:
                     notify(settings, detail, smtp_identity)
                     sent = True
-                    print("Unhealthy notification sent.")
+                    LOG.info("Unhealthy notification sent.")
                 except (OSError, smtplib.SMTPException) as exc:
-                    print(f"Email delivery failed ({type(exc).__name__}). Will retry.")
+                    LOG.error("Email delivery failed (%s). Will retry.", type(exc).__name__)
         time.sleep(interval)
 
 
@@ -284,13 +607,17 @@ def main():
     os.umask(0o077)
     if sys.argv[1:] in (["healthcheck"], ["monitor-healthcheck"]):
         detail = probe("127.0.0.1" if sys.argv[1] == "healthcheck" else HEALTH_HOST)
-        sys.exit(detail)
+        if detail is not None:
+            LOG.error("Health check failed (%s).", detail)
+            sys.exit(1)
+        sys.exit()
     try:
-        data = yaml.safe_load(CONFIG.read_text())
+        data = yaml.load(CONFIG.read_text(), Loader=ConfigLoader)
     except yaml.YAMLError:
         raise ValueError("invalid config.yaml syntax") from None
     if not isinstance(data, dict):
         raise ValueError("config.yaml must be a mapping")
+    LOG.setLevel(logging.DEBUG if debug_enabled(data) else logging.INFO)
     if sys.argv[1:] == ["monitor"]:
         monitor(data)
     elif sys.argv[1:] == ["serve"]:
@@ -310,14 +637,20 @@ def main():
         os.setuid(account.pw_uid)
         if material:
             configure_tls(material)
-        configure(data, tls)
-        os.execlp("kamailio", "kamailio", "-DD", "-E", "-f", "/opt/sipdock/kamailio.cfg")
+        serve(*configure(data, tls))
     else:
         raise ValueError("use serve or monitor")
 
 
 if __name__ == "__main__":
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(ThreadFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
     try:
         main()
     except (ValueError, OSError, sqlite3.Error, subprocess.CalledProcessError) as error:
-        sys.exit(f"SipDock startup failed: {error}")
+        LOG.error("SipDock failed: %s", error)
+        sys.exit(1)
+    except Exception:
+        LOG.exception("SipDock failed unexpectedly.")
+        sys.exit(1)

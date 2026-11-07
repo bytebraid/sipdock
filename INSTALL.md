@@ -76,7 +76,9 @@ docker compose ps
 docker compose logs --tail=50 proxy monitor
 ```
 
-From an allowed probe, request `http://HOST:5062/healthz`: **200** means the provider registration is active, **503** means it is not ready. On the Docker host, open [the registrations page](http://127.0.0.1:8081/registrations). Register two phones using the [phone settings](README.md#-register-phones-and-set-capacity), call the line, answer one and check that the other stops ringing. Check two-way audio separately; RTP travels directly between the phone and provider.
+From an allowed probe, request `http://HOST:5062/healthz`. HTTP 200 with body `registered` means the provider accepted the upstream registration. HTTP 200 with `ready` means the standby is intentionally idle. HTTP 503 means SipDock is trying to register. For two hosts, configure one preferred master and one standby using the [DNS failover settings](README.md#dns-failover-with-a-preferred-master).
+
+On the Docker host, open [the registrations page](http://127.0.0.1:8081/registrations). Register two phones using the [phone settings](README.md#-register-phones-and-set-capacity), call the line, answer one and check that the other stops ringing. Check two-way audio separately; RTP travels directly between the phone and provider.
 
 The [Compose file](compose.yaml) keeps **four 10 MiB Docker logs per service**, including the active file: **80 MiB total** (about 84 MB) for one proxy and one monitor. Stdout and `docker compose logs` still work. After upgrading an existing stack, run `docker compose up -d --force-recreate` to apply rotation; a restart alone retains the old [Docker logging settings](https://docs.docker.com/engine/logging/drivers/json-file/).
 

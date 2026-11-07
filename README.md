@@ -135,9 +135,33 @@ For an ISP-wide phone allowlist, use the IPv4 and IPv6 prefixes **originated** b
 
 ## 🩺 Health, alerts and registrations
 
-- **Upstream health** — probe `GET /healthz` on host TCP 5062. A registered upstream gives HTTP 200. Startup or loss of registration gives 503. Add the load balancer’s probe CIDRs to `firewall.health_sources` alongside the Compose monitor addresses. The endpoint can be healthy with zero local phones.
+- **Upstream health** — probe `GET /healthz` on host TCP 5062. The response body is `registered` (HTTP 200) after the provider accepts the binding, `ready` (HTTP 200) on an idle standby, or `upstream unregistered` (HTTP 503) while trying to register. Add the probe source CIDRs to `firewall.health_sources`. The endpoint can be healthy with zero local phones.
 - **Email notifications** — enable `alerts.enabled` and supply sender, recipient, SMTP host and TLS mode. The monitor retries failed deliveries and sends one alert per outage after the configured failure threshold. A successful probe rearms it. Test by stopping only the proxy and starting it again once the alert arrives. A host outage requires an external monitor.
 - **Phone registrations** — open [the local registrations page](http://127.0.0.1:8081/registrations) on the Docker host. It shows upstream state and each active phone’s user agent, contact address, observed source and time to expiry. For a remote server, run `ssh -L 8081:127.0.0.1:8081 user@docker-host` first. The report refreshes every 15 seconds.
+
+### DNS failover with a preferred master
+
+Set `mutex.enabled: false` on the master. This is the default for existing configs. The master starts registering immediately. After a failed SIP registration transaction it waits 2, 4, 8, 16 and then 30 seconds between attempts. It continues at 30 seconds until successful.
+
+On the standby, point the probe at the preferred master. This example uses the master's existing Compose health port.
+
+```yaml
+mutex:
+  enabled: true
+  healthz: "http://master.example.net:5062/healthz"
+```
+
+The default target is `$advertised_host/healthz`. A hostname or HTTPS URI tries verified HTTPS first and falls back to HTTP on transport failure. An explicit HTTP URI uses HTTP directly. Without an explicit port the respective defaults are 443 and 80. A valid HTTPS response, including 503, decides that poll. Allow the standby’s probe source in the master’s `firewall.health_sources`. A reverse proxy should forward the response body and `X-SipDock-Instance` header and disable caching.
+
+Check the proxy startup log for its effective role and the standby’s probe URI. Duplicate YAML settings stop startup and report both line numbers. With `logging.debug: true`, the `mutex-poll` thread logs its start, each GET URI, the HTTP status and response body or transport error, the election decision, and the time until the next poll. A healthy master should produce `status=200`, `body=b'registered\n'` and `role=standby`. In the SIP send log, `expires=0` identifies a release and a positive expiry identifies registration or renewal.
+
+| Standby state | Poll interval | Action |
+| --- | --- | --- |
+| Starting in `ready` | 20s | Stay unbound while the master returns 200. Attempt registration on an error or after the same peer stays `ready` for six complete intervals (120s at startup). |
+| Trying to register or already registered | 10s | Retry failed SIP transactions after 30s. When another instance answers `ready` or `registered`, send a contact-specific SIP unregister immediately and return to `ready`. An instance recognizes its own health response if DNS points back to it. |
+| After yielding | 30s | Remain unbound while the master reports `registered`. An error triggers takeover. Six complete intervals of continuous `ready` also trigger takeover. |
+
+The standby uses its own SIP Contact user and the configured line and credentials. This lets it release only its own binding. DNS and health polling provide best-effort failover. A network partition can leave both hosts registered, and when the master returns there can be overlap until the standby’s next poll and the provider processes its unregister. If the provider rejects the preferred master while the standby holds the line, stop the standby to release its Contact and allow the master’s next retry to succeed.
 
 ## 🔎 Troubleshoot registrations
 

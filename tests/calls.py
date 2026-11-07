@@ -11,8 +11,9 @@ import tempfile
 import time
 from contextlib import ExitStack, closing
 from email.parser import Parser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from queue import Queue
-from threading import Thread
+from threading import Event, Thread
 from uuid import uuid4
 from pathlib import Path
 
@@ -101,7 +102,7 @@ def authorization(challenge, method, uri, password=PASSWORD, username="lab-auth"
             f'uri="{uri}", response="{digest}", qop=auth, nc=00000001, cnonce="phone"')
 
 
-def health(expected):
+def health(expected, body=None):
     deadline = time.monotonic() + 20
     observed = None
     while time.monotonic() < deadline:
@@ -110,8 +111,8 @@ def health(expected):
                 conn.request("GET", "/healthz")
                 response = conn.getresponse()
                 observed = (response.status, response.read(100))
-                if response.status == expected:
-                    return
+                if response.status == expected and (body is None or observed[1].strip() == body):
+                    return response.getheader("X-SipDock-Instance")
         except (OSError, http.client.HTTPException) as exc:
             observed = type(exc).__name__
         time.sleep(0.1)
@@ -135,26 +136,32 @@ def registrations(*phones, upstream="Registered"):
     return page
 
 
-def upstream_register(provider):
-    request = provider.receive("REGISTER", 20)
+def upstream_register(provider, *, standby=False, release=False, timeout=20, lifetime=180):
+    request = provider.receive("REGISTER", timeout)
     contact = request[1]["Contact"]
-    assert "sip:1001@127.0.0.1:5060" in contact
+    if standby:
+        assert re.fullmatch(r"<sip:sd-[0-9a-f]{24}@127\.0\.0\.1:5060>", contact), contact
+    else:
+        assert "sip:1001@127.0.0.1:5060" in contact
+    assert (int(request[1]["Expires"]) == 0) == release
     provider.reply(request, "401 Unauthorized", headers=[
         'WWW-Authenticate: Digest realm="provider.test", nonce="labnonce", qop="auth"'])
     start, headers = request = provider.receive("REGISTER")
+    assert headers["Contact"] == contact and (int(headers["Expires"]) == 0) == release
     actual = fields(headers["Authorization"])
     assert actual["username"] == "lab-auth" and actual["uri"] == start.split()[1]
     ha1 = md5("lab-auth:provider.test:" + PASSWORD)
     ha2 = md5("REGISTER:" + actual["uri"])
     assert actual["response"] == md5(f"{ha1}:labnonce:{actual['nc']}:{actual['cnonce']}:auth:{ha2}")
-    provider.reply(request, "200 OK", headers=["Contact: " + contact, "Expires: 180"])
-    health(200)
+    provider.reply(request, "200 OK", headers=["Contact: " + contact, f"Expires: {0 if release else lifetime}"])
+    health(200, b"ready" if release else b"registered")
+    return contact
 
 
-def inbound(provider, phones):
+def inbound(provider, phones, destination="sip:1001@127.0.0.1:5060"):
     call = uuid4().hex
     caller = "sip:external@provider.test"
-    provider.request("INVITE", "sip:1001@127.0.0.1:5060",
+    provider.request("INVITE", destination,
                      origin=caller, to=f"<{AOR}>", call=call, headers=[
                          f"Contact: <{provider.contact}>", "Content-Type: application/sdp"],
                      body="v=0\r\ns=lab\r\n")
@@ -268,9 +275,83 @@ def check_lower_limits():
             server = subprocess.Popen(["python3", "sipdock.py", "serve"])
             stack.callback(stop, server)
             health(503)
+            if limit == 1:
+                request = provider.receive("REGISTER")
+                provider.reply(request, "403 Forbidden")
+                before = time.monotonic()
+                request = provider.receive("REGISTER")
+                assert 2 <= time.monotonic() - before < 4
+                provider.reply(request, "403 Forbidden")
+                before = time.monotonic()
             upstream_register(provider)
+            if limit == 1:
+                assert 4 <= time.monotonic() - before < 7
+                print("PASS preferred master retries rejected registrations with backoff")
             capacity(stack, provider, limit)
     path.write_bytes(fixture)
+
+
+def check_failover():
+    # This runs only with the release hook's isolated tmpfs and lab config.
+    path = Path("/etc/sipdock/config.yaml")
+    fixture = path.read_bytes()
+    config = yaml.safe_load(fixture)
+
+    class Master(BaseHTTPRequestHandler):
+        status = 200
+        polled = Event()
+        timeout = 1
+
+        def do_GET(self):
+            self.send_response(self.status)
+            self.send_header("X-SipDock-Instance", "master")
+            self.end_headers()
+            self.wfile.write(b"registered\n" if self.status == 200 else b"down\n")
+            self.polled.set()
+
+        def log_message(self, *args):
+            pass
+
+    with ExitStack() as stack:
+        stack.callback(path.write_bytes, fixture)
+        master = stack.enter_context(HTTPServer(("127.0.0.1", 0), Master))
+        Thread(target=master.serve_forever, daemon=True).start()
+        stack.callback(master.shutdown)
+        # A bare URI probes HTTPS first. This HTTP-only master exercises fallback.
+        config["mutex"] = dict(enabled=True, healthz=f"127.0.0.1:{master.server_port}/healthz")
+        path.write_text(yaml.safe_dump(config))
+        provider = Peer(stack, "127.0.0.2", 15060)
+        server = subprocess.Popen(["python3", "sipdock.py", "serve"])
+        stack.callback(stop, server)
+        instance = health(200, b"ready")
+        assert instance and instance != "master"
+        assert Master.polled.wait(5), "standby did not check the master"
+        provider.sock.settimeout(2)
+        try:
+            provider.sock.recv(8192)
+            raise AssertionError("standby sent SIP traffic while the master was registered")
+        except TimeoutError:
+            pass
+        Master.status = 503
+        contact = upstream_register(provider, standby=True, timeout=25, lifetime=8)
+        assert upstream_register(provider, standby=True, timeout=8) == contact
+        phones = [Peer(stack), Peer(stack)]
+        for phone in phones:
+            phone.register()
+        inbound(provider, phones, destination=contact.strip("<>"))
+        Master.status = 200
+        assert upstream_register(provider, standby=True, release=True, timeout=15) == contact
+        assert health(200, b"ready") == instance
+        Master.status = 503
+        refused = provider.receive("REGISTER", 35)
+        assert int(refused[1]["Expires"]) > 0
+        started = time.monotonic()
+        provider.reply(refused, "403 Forbidden")
+        health(503)
+        assert upstream_register(provider, standby=True, timeout=35) == contact
+        elapsed = time.monotonic() - started
+        assert 29 <= elapsed < 34, elapsed
+        print("PASS standby, takeover, authenticated release, reacquisition and 30s provider retry")
 
 
 def main():
@@ -359,4 +440,5 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:] == ["--capacity-matrix"]:
         check_lower_limits()
+        check_failover()
     main()
