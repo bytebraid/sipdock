@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+snapshot=$(mktemp -d)
+trap 'rm -rf "$snapshot"' EXIT
+trap 'exit 1' HUP INT TERM
+git checkout-index --all --prefix="$snapshot/"
+
+if [ -x .venv/bin/python ]; then
+    python=.venv/bin/python
+elif [ -x .venv/Scripts/python.exe ]; then
+    python=.venv/Scripts/python.exe
+elif command -v python >/dev/null 2>&1; then
+    python=python
+else
+    python=python3
+fi
+
+badges='docs/badges/coverage.svg'
+if engine=$(docker info --format '{{.OSType}}' 2>/dev/null) && [ "$engine" = linux ]; then
+    "$python" "$snapshot/tools/check.py"
+    badges="$badges docs/badges/tests.svg"
+else
+    echo "Linux Docker engine unavailable. Updating coverage and keeping the last full-run release badge." >&2
+    "$python" "$snapshot/tools/check.py" --coverage-only
+fi
+# Refresh working copies that still match the index. Preserve any local edits.
+set --
+for badge in $badges; do
+    if git ls-files --error-unmatch -- "$badge" >/dev/null 2>&1; then
+        git diff --quiet -- "$badge" || continue
+    elif [ -e "$badge" ]; then
+        continue
+    fi
+    set -- "$@" "$badge"
+done
+
+# Git may pass a relative index path, including a temporary one for partial commits.
+index=$(git rev-parse --path-format=absolute --git-path index)
+GIT_INDEX_FILE="$index" git --work-tree="$snapshot" add -- $badges
+if [ "$#" -gt 0 ]; then
+    git checkout-index --force -- "$@"
+fi

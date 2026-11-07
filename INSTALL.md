@@ -1,27 +1,38 @@
-# 🍌 Install SipDock
+<h1 align="center">📳 Installing SipDock 📳</h1>
 
-**The firewall denies inbound traffic by default. Specify your CIDRs in `config.yml` before starting.** A phone outside the allowlist can time out without producing a SIP log entry. Allow the phones’ source networks, your provider’s inbound signalling servers and any health probes separately. Existing installs can keep `config.yaml`; the filename selection is below.
+<h5 align="center">Configure, Run, Debug, Repeat</h5>
+# 🖥️ Docker Install and Configuration
 
-## 🐳 Install Docker Engine on Linux
+> ### 🔥 **FIREWALL REMINDER** - You must add your allowed CIDRs in [`config.yml`](config.example.yaml)
+
+⚠️ **iptables** running in the container will **DROP** all inbound connections not whitelisted in [`config.yaml`](config.example.yaml)
+
+## 📋 Quest Items You Must Collect
+
+- A Linux host reachable by the provider and phones. Default ports are **UDP 5060** for the provider and UDP phones; **TCP 5061** for phones using mutual TLS. **TCP 5062** for health probes and host-loopback. Local **TCP 8081** for the registration page.
+- Docker Compose v2, a working IPv4/IPv6 bridge, and kernel support for IPv4 and IPv6 netfilter. Use the supplied bridge and container capabilities. **Do not use host networking:** SipDock installs firewall rules in its network namespace.
+- One SIP account with any VoIP provider supporting **IPv4 UDP registration**. From your chosen VoIP provider, obtain registration server, domain, SIP credentials (user/auth user/password) and inbound signalling IPs. Credentials are required, trunks authenticated by IP alone cannot satisfy SipDock’s registration health check.
+- ***[/tools/]("/tools") require Python 3 and OpenSSL 1.1.1+*** to issue certificates; ***Bash and Docker CLI*** access for the debug shell. Email alerts need a ***reachable SMTP relay.***
+
+
+## 🐳 Installing Docker Engine on Linux
 
 [Ubuntu](https://docs.docker.com/engine/install/ubuntu/) · [Debian](https://docs.docker.com/engine/install/debian/) · [Red Hat Enterprise Linux](https://docs.docker.com/engine/install/rhel/) · [Fedora](https://docs.docker.com/engine/install/fedora/) · [CentOS Stream](https://docs.docker.com/engine/install/centos/) · [Installation guides on GitHub](https://github.com/docker/docs/tree/main/content/manuals/engine/install)
 
-## 🪟 Windows (unsupported)
+## 🪟 Installing Docker Engine on Windows (unsupported)
 
-![Your mileage may vary](docs/ymmv.gif)
+<p align="center"><img src="docs/ymmv.gif" width="350px" /></p>
 
-**YMMV — Windows is an unsupported host for SipDock.**
+### **YMMV — Windows is unsupported** 
+
+  - 🐧 Use a Linux VM (Recommended) 
+  - 👩‍💻 WSL 2 
+
 
 [Install WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install) · [Install Docker Desktop on Windows](https://docs.docker.com/desktop/setup/install/windows-install/) · [Configure Docker’s WSL 2 backend](https://docs.docker.com/desktop/features/wsl/)
 
-## 📋 Requirements
 
-- A Linux Docker Engine host with Docker Compose v2, a working IPv4/IPv6 bridge, and kernel support for IPv4 and IPv6 netfilter. Use the supplied bridge and container capabilities. **Do not use host networking:** SipDock installs firewall rules in its network namespace.
-- One SIP account that supports **IPv4 UDP registration** and inbound calls to the registered contact. Obtain its registrar, domain, credentials and inbound signalling IPs. An IP-authenticated-only trunk cannot satisfy SipDock’s registration health check.
-- A hostname or address reachable by the provider and phones. Forward **UDP 5060** for the provider and UDP phones; add **TCP 5061** for phones using mutual TLS. Reserve **TCP 5062** for health probes and host-loopback **TCP 8081** for the registration page.
-- Optional host tools: Python 3 and OpenSSL 1.1.1+ to issue certificates; Bash and Docker CLI access for the debug shell. Email alerts need a reachable SMTP relay.
-
-## 🛡️ Configure the firewall and line
+## 🛡️ Configure the firewall and VoIP line
 
 On a **new** installation, copy the example and add the following line to the project's `.env`:
 
@@ -45,7 +56,7 @@ If you already have an edited `config.yaml`, keep it and omit the override. Both
 
 Check that the Compose bridge subnets do not overlap your LAN or VPN. If they do, update the bridge, static addresses and corresponding firewall grants together. A load balancer in front of SIP must preserve the client source IP; use TCP passthrough for mutual TLS.
 
-## 🇬🇧 UK provider signalling addresses
+## 📍🇬🇧 UK provider signalling addresses
 
 Checked **6 November 2026**. Use the row for your **exact product** and confirm it against your order before granting access. The table separates documented signalling addresses from destinations that still need inbound confirmation. RTP media uses a different path and does not belong in `upstream.trusted_sources`.
 
@@ -53,7 +64,7 @@ Checked **6 November 2026**. Use the row for your **exact product** and confirm 
 | --- | --- | --- |
 | Gamma SIP Trunks | `88.215.48.0/20`, `151.2.128.0/19` (published UDP signalling ranges, overlapping entries combined) | Prefer the assigned signalling gateway(s) from your order as `/32`. Gamma’s documented public trunk uses static-IP authentication; check registration support on your reseller product. [Service definition §6.1](https://assets.applytosupply.digitalmarketplace.service.gov.uk/g-cloud-14/documents/700154/722211090400184-service-definition-document-2024-05-03-1553.pdf) |
 | BT Business Cloud Voice SIP | `217.32.186.185/32`, `217.32.186.121/32` | BT identifies these as primary/secondary signalling hosts and describes outbound registration. Confirm inbound sources for your service before trusting them. Do not include the adjacent media addresses. [BT firewall guide](https://business.bt.com/content/dam/bt-business/pdfs/help-and-support/phone-systems/configure-lan-and-firewall-for-cloud-voice/bt-cloud-voice-sip-trunking-lan-firewall-guide.pdf) |
-| Voipfone | No complete inbound CIDR list verified. | `sip.voipfone.net` is the registrar. Ask [Voipfone support](https://www.voipfone.co.uk/contact) for current inbound and failover IPs; a registrar DNS answer does not establish the full list. [Configuration guide](https://www.voipfone.co.uk/support/hardware/telephones/hardware) |
+| Voipfone | `46.31.225.0/24` <br/> (No complete inbound CIDR list verified) | `sip.voipfone.net` is the registrar. Ask [Voipfone support](https://www.voipfone.co.uk/contact) for current inbound and failover IPs; a registrar DNS answer does not establish the full list. [Configuration guide](https://www.voipfone.co.uk/support/hardware/telephones/hardware) |
 | Andrews & Arnold (A&A) VoIP | `81.187.30.110/31`, `81.187.30.112/29`, `90.155.3.0/24`, `90.155.103.0/24` | A&A lists all four for incoming UDP 5060. Its guide also lists IPv6; SipDock currently uses IPv4 on the provider leg. [A&A firewall table](https://support.aa.net.uk/VoIP_Firewall) |
 | Yay.com | `34.105.209.181/32`, `34.147.142.100/32`, `34.89.77.216/32`, `35.246.58.184/32`, `34.147.181.186/32`, `35.234.151.7/32`, `35.197.230.12/32`, `34.105.130.238/32`, `34.89.66.152/32`, `34.13.58.148/32` | Listed **SIP source** IPs. The guide lists TCP/TLS signalling; confirm UDP registration on your product. For a trunk, use **Show IP Ranges** in its settings. [Firewall guide](https://www.yay.com/faq/voip-network/firewall/) · [Trunk settings](https://www.yay.com/faq/sip/creating-a-sip-trunk/) |
 

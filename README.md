@@ -1,4 +1,4 @@
-<h1 align="center">🍌 SipDock</h1>
+<h1 align="center">📳 SipDock 📳</h1>
 
 ![A banana handset on a rotary phone connects one SIP provider to several ringing endpoints](docs/sipdock.svg)
 
@@ -190,7 +190,19 @@ python3 -m venv .venv
 
 The runner measures Python line and branch coverage for `sipdock.py`, builds the production image, then runs real SIP exchanges with a synthetic provider. Wire tests cover registration capacity, overflow and slot reuse, simultaneous ringing and cancellation, outbound calls, email, mTLS, and IPv4/IPv6 firewall isolation. Test credentials and ephemeral certificates stay in the test environment.
 
-The badges show the **last recorded full run**. The coverage badge measures Python unit-test lines. The pass badge counts the four release checks. The runner writes Cobertura XML, coverage JSON and check results under `reports/` and refreshes the two SVG badges. Commit badge changes with the code. GitHub Actions reruns the checks on pushes and pull requests, verifies the badges and uploads the reports. [Workflow](.github/workflows/checks.yml) · [Test hook](tools/check.py)
+The coverage badge reports the percentage of `sipdock.py` lines exercised by the unit tests. The release badge counts the four checks that passed. A manual run refreshes both SVGs and writes Cobertura XML, coverage JSON and check results under `reports/`.
+
+After installing the dependencies above, enable the pre-commit hook once per clone.
+
+```sh
+git config --local core.hooksPath .githooks
+```
+
+On `git commit`, the hook runs the Python unit tests on a temporary copy of the staged files and stages fresh coverage. It uses the Python interpreter in `.venv` when present, then tries `python` and `python3` on `PATH`. When a Linux Docker engine is reachable, it also builds the image, runs the integration tests and stages the release badge. When Docker is unavailable, the release badge keeps the result of the last full run. Any check that runs and fails stops the commit. [Pre-commit hook](.githooks/pre-commit)
+
+Git uses a temporary index for `git commit -- <paths>`. If a badge changes during that commit, its previous version can still appear staged afterward. Run `git restore --staged -- docs/badges/coverage.svg docs/badges/tests.svg` to sync those index entries with the new commit.
+
+GitHub Actions reruns the checks on pushes and pull requests, verifies the badges and uploads the reports. [Workflow](.github/workflows/checks.yml)
 
 ## 📜 License
 

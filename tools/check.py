@@ -1,4 +1,5 @@
 """Run the release checks and generate the README badges from their exit status."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -22,10 +23,10 @@ def badge(name, label, value, color):
         f'<rect x="{left}" width="{right}" height="22" fill="{color}"/></g>\n'
         f'  <g fill="white" font-family="Verdana,sans-serif" font-size="11" text-anchor="middle">'
         f'<text x="{left/2:g}" y="15">{escape(label)}</text>'
-        f'<text x="{left+right/2:g}" y="15">{escape(value)}</text></g>\n</svg>\n', encoding="utf-8")
+        f'<text x="{left+right/2:g}" y="15">{escape(value)}</text></g>\n</svg>\n', encoding="utf-8", newline="\n")
 
 
-def main():
+def main(coverage_only=False):
     os.chdir(ROOT)
     REPORTS.mkdir(exist_ok=True)
     BADGES.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,9 @@ def main():
     else:
         badge("coverage", "Python line coverage", "unavailable", "#854b43")
 
+    if coverage_only:
+        return 0 if results["Python unit tests"] else 1
+
     if check("Production image", ["docker", "build", "-t", "sipdock:local", "."]):
         check("UDP calls and capacity", ["docker", "run", "--rm", "--network", "none", "--cap-add", "NET_ADMIN",
               "--sysctl", "net.ipv6.bindv6only=1", "--add-host", "proxy:127.0.0.1",
@@ -70,4 +74,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--coverage-only", action="store_true",
+                        help="run the Python tests and refresh the coverage badge")
+    sys.exit(main(parser.parse_args().coverage_only))
